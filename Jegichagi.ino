@@ -1,12 +1,13 @@
 // ====== M5StickC Plus2 TCP Client with FreeRTOS Queue ======
 #include <M5Unified.h>
 #include <WiFi.h>
+#include <secrets.h>
 
 // ===== 사용자 환경 =====
-static const char* WIFI_SSID   = "SK_WiFiGIGA1D02_2.4G";     // 수정
-static const char* WIFI_PSK    = "1805000638";     // 수정
-static const char* SERVER_IP   = "192.168.35.189";  // 노트북 IP로 수정
-static const uint16_t SERVER_PORT = 5000;
+static const char* WIFI_SSID  = WIFI_SSID_STR;
+static const char* WIFI_PSK   = WIFI_PASSWORD_STR;
+static const char* SERVER_IP= SERVER_HOST_STR;
+static const uint16_t SERVER_PORT = SERVER_PORT_NUM;
 
 static constexpr int PIN_HOLD = 4;
 
@@ -53,7 +54,6 @@ bool ensureSocket() {
 
   if (!g_client.connect(SERVER_IP, SERVER_PORT)) return false;
 
-  // (옵션) 최초 1회: MAC 전송 + OK 확인을 이미 끝내셨다면 아래는 생략 가능
   String mac = WiFi.macAddress();
   g_client.print(mac); g_client.print("\n");
   uint32_t t0 = millis();
@@ -77,16 +77,14 @@ void SocketTask(void* parameter) {
   for (;;) {
     if (!ensureSocket()) { vTaskDelay(pdMS_TO_TICKS(1000)); continue; }
 
-    // 큐에서 메시지 꺼내어 한 줄로 전송
     Msg msg;
     if (xQueueReceive(g_msgq, &msg, pdMS_TO_TICKS(100)) == pdTRUE) {
       g_client.print(msg.buf);
       g_client.print("\n");
     }
 
-    // 서버에서 오는 데이터 처리(옵션)
     while (g_client.connected() && g_client.available()) {
-      (void)g_client.read(); // 이번 요구사항에선 무시
+      (void)g_client.read();
     }
     vTaskDelay(pdMS_TO_TICKS(5));
   }
@@ -103,37 +101,146 @@ void DisplayTask(void* parameter) {
 
 // ===== 간단 IMU 기반 킥 감지 태스크 =====
 // 가속도 magnitude가 thresh_hi를 넘었다가 다시 thresh_lo 아래로 떨어질 때 1회로 인식
-void KickDetectTask(void* parameter) {
-  const float thresh_hi = 2.0f; // 중력 1g 기준, 스파이크 임계치(필요 시 튜닝)
-  const float thresh_lo = 1.2f; // 히스테리시스 하한
-  bool armed = true;
-  uint32_t lastTick = 0;
+// void KickDetectTask(void* parameter) {
+//   const float thresh_hi = 2.0f; // 중력 1g 기준, 스파이크 임계치(필요 시 튜닝)
+//   const float thresh_lo = 1.2f; // 히스테리시스 하한
+//   bool armed = true;
+//   uint32_t lastTick = 0;
 
-  // IMU 준비
-  //if (!M5.Imu.isEnabled()) M5.Imu.setEnabled(true);
+//   // IMU 준비
+//   //if (!M5.Imu.isEnabled()) M5.Imu.setEnabled(true);
+
+//   for (;;) {
+//     float ax=0, ay=0, az=0;
+//     M5.Imu.getAccel(&ax, &ay, &az);
+//     float mag = sqrtf(ax*ax + ay*ay + az*az); // g 단위
+
+//     uint32_t now = millis();
+
+//     // 너무 빠른 중복 방지(예: 250ms 이내 중복 무시)
+//     bool cooldown = (now - lastTick < 250);
+
+//     if (armed && !cooldown && mag > thresh_hi) {
+//       // 피크 감지
+//       g_kickCount++;
+//       lastTick = now;
+//       armed = false;
+//     }
+//     if (!armed && mag < thresh_lo) {
+//       // 원위치 → 재무장
+//       armed = true;
+//     }
+
+//     vTaskDelay(pdMS_TO_TICKS(10));
+//   }
+// }
+
+// ===== IMU 기반 킥 감지 태스크 =====
+void KickDetectTask(void* parameter) {
+  // ----- 파라미터 (튜닝 필수) -----
+  const float W_HI = 2.5f;
+  const float A_HI = 2.2f;
+  const float A_LO = 1.2f;
+  const uint32_t T_SWING_MIN   = 60;
+  const uint32_t T_SWING_MAX   = 450;
+  const uint32_t T_IMPACT_WIN  = 180;
+  const uint32_t T_RECOVER     = 120;
+  const uint32_t T_COOLDOWN    = 220;
+  const uint32_t T_MIN_INTERVAL= 250;
+
+  // ----- 축 선택 -----
+  enum Axis { X=0, Y=1, Z=2 };
+  Axis swingAxis = Y;
+  Axis instepAxis = X;
+
+  // ----- 지수이동 평균 필터 -----
+  auto ema = [](float prev, float x, float alpha){ return alpha*x + (1.f-alpha)*prev; };
+  float axf=0, ayf=0, azf=0, gx_f=0, gy_f=0, gz_f=0;
+  const float A_ALPHA = 0.25f;
+  const float G_ALPHA = 0.20f;
+
+  // ----- 상태기계 -----
+  enum State { IDLE, SWING, IMPACT_WAIT, COOLDOWN };
+  State st = IDLE;
+
+  uint32_t t_enter = 0;
+  uint32_t lastCountMs = 0;
+  bool swingArmed = false;
 
   for (;;) {
-    float ax=0, ay=0, az=0;
-    M5.Imu.getAccel(&ax, &ay, &az);
-    float mag = sqrtf(ax*ax + ay*ay + az*az); // g 단위
+    float ax, ay, az, gx, gy, gz;
+    M5.Imu.getAccel(&ax, &ay, &az);  // g
+    M5.Imu.getGyro(&gx, &gy, &gz);   // rad/s
+
+    // 필터
+    axf = ema(axf, ax, A_ALPHA);
+    ayf = ema(ayf, ay, A_ALPHA);
+    azf = ema(azf, az, A_ALPHA);
+    gx_f = ema(gx_f, gx, G_ALPHA);
+    gy_f = ema(gy_f, gy, G_ALPHA);
+    gz_f = ema(gz_f, gz, G_ALPHA);
+
+    // 축 추출
+    float gSwing = (swingAxis==X)?gx_f: (swingAxis==Y)?gy_f:gz_f;
+    float aInstep= (instepAxis==X)?axf: (instepAxis==Y)?ayf:azf;
+    float aMag   = sqrtf(axf*axf + ayf*ayf + azf*azf);
 
     uint32_t now = millis();
 
-    // 너무 빠른 중복 방지(예: 250ms 이내 중복 무시)
-    bool cooldown = (now - lastTick < 250);
+    switch (st) {
+      case IDLE: {
+        if (now - lastCountMs < T_MIN_INTERVAL) break;
 
-    if (armed && !cooldown && mag > thresh_hi) {
-      // 피크 감지
-      g_kickCount++;
-      lastTick = now;
-      armed = false;
-    }
-    if (!armed && mag < thresh_lo) {
-      // 원위치 → 재무장
-      armed = true;
+        if (fabsf(gSwing) > W_HI) {
+          st = SWING; t_enter = now; swingArmed = true;
+        }
+        break;
+      }
+
+      case SWING: {
+        uint32_t dt = now - t_enter;
+
+        if (dt > T_SWING_MAX) {
+          st = IDLE; swingArmed = false;
+          break;
+        }
+
+        if (fabsf(gSwing) < (W_HI*0.6f)) {
+          if (dt < T_SWING_MIN) { st = IDLE; swingArmed = false; }
+          else { st = IMPACT_WAIT; t_enter = now; }
+        }
+        break;
+      }
+
+      case IMPACT_WAIT: {
+        uint32_t dt = now - t_enter;
+
+        if (aMag > A_HI) {
+          bool directionOK = (aInstep > (A_HI - 0.2f));
+          if (directionOK && swingArmed) {
+            g_kickCount++;
+            lastCountMs = now;
+            st = COOLDOWN; t_enter = now;
+          } else {
+            // 벽/바닥/기타 충돌로 간주 → 무시
+            st = IDLE;
+          }
+        } else if (dt > T_IMPACT_WIN) {
+          // 임팩트 없이 지나감 → 취소
+          st = IDLE;
+        }
+        break;
+      }
+
+      case COOLDOWN: {
+        if ((aMag < A_LO) && (now - t_enter > T_RECOVER) && (now - lastCountMs > T_COOLDOWN)) {
+          st = IDLE; swingArmed = false;
+        }
+        break;
+      }
     }
 
-    vTaskDelay(pdMS_TO_TICKS(10));
+    vTaskDelay(pdMS_TO_TICKS(8));
   }
 }
 

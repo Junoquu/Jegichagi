@@ -1,4 +1,4 @@
-#define _CRT_SECURE_NO_WARNINGS
+ï»¿#define _CRT_SECURE_NO_WARNINGS
 #define _WINSOCK_DEPRECATED_NO_WARNINGS
 
 #include <stdio.h>
@@ -17,14 +17,14 @@
 #define READ_DATA(s, buf, len) recv(s, buf, len, 0)
 #define WRITE_DATA(s, buf, len) send(s, buf, len, 0)
 
-// '\n' ¶Ç´Â '\0' ±îÁö ÇÑ ÇÁ·¹ÀÓ(readline) ¹Ş±â
+// '\n' ë˜ëŠ” '\0' ê¹Œì§€ í•œ í”„ë ˆì„(readline) ë°›ê¸°
 static int recv_frame(SOCKET s, char* out, int max) {
     int total = 0;
     while (total < max - 1) {
         char c;
         int n = recv(s, &c, 1, 0);
         if (n <= 0) return n; // 0=closed, <0=error
-        if (c == '\0' || c == '\n') { // µÑ ´Ù ÇÁ·¹ÀÌ¹ÖÀ¸·Î ÀÎÁ¤
+        if (c == '\0' || c == '\n') { // ë‘˜ ë‹¤ í”„ë ˆì´ë°ìœ¼ë¡œ ì¸ì •
             out[total] = '\0';
             return total;
         }
@@ -55,7 +55,7 @@ int main() {
         return 1;
     }
 
-    // Æ÷Æ® Àç»ç¿ë
+    // í¬íŠ¸ ì¬ì‚¬ìš©
     int yes = 1;
     setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, (const char*)&yes, sizeof(yes));
 
@@ -77,7 +77,7 @@ int main() {
         return 1;
     }
 
-    printf("¼­¹ö°¡ Æ÷Æ® %d¿¡¼­ ´ë±â ÁßÀÔ´Ï´Ù...\n", PORT);
+    printf("ì„œë²„ê°€ í¬íŠ¸ %dì—ì„œ ëŒ€ê¸° ì¤‘ì…ë‹ˆë‹¤...\n", PORT);
 
     while (1) {
         client_fd = accept(server_fd, (struct sockaddr*)&client_addr, &client_addr_len);
@@ -88,13 +88,13 @@ int main() {
             return 1;
         }
 
-        printf("Å¬¶óÀÌ¾ğÆ® ¿¬°áµÊ: %s\n", inet_ntoa(client_addr.sin_addr));
+        printf("í´ë¼ì´ì–¸íŠ¸ ì—°ê²°ë¨: %s\n", inet_ntoa(client_addr.sin_addr));
 
-        // 1) ÇÚµå¼ÎÀÌÅ©: "id mac name" ÇÑ ÇÁ·¹ÀÓ ¼ö½Å
+        // 1) í•¸ë“œì…°ì´í¬: "id mac name" í•œ í”„ë ˆì„ ìˆ˜ì‹ 
         read_len = recv_frame(client_fd, buffer, BUF_SIZE);
         if (read_len > 0) {
             UINT original_cp = GetConsoleOutputCP();
-            printf("¹ŞÀº ¹®ÀÚ¿­: ");
+            printf("ë°›ì€ ë¬¸ìì—´: ");
             SetConsoleOutputCP(CP_UTF8);
             printf("[%s]\n", buffer);
             SetConsoleOutputCP(original_cp);
@@ -103,7 +103,7 @@ int main() {
                 int found = 0;
                 FILE* fp = fopen("studentlist.dat", "r");
                 if (fp == NULL) {
-                    strcpy(buffer, "ERROR: file open\n");  // \n Ãß°¡
+                    strcpy(buffer, "ERROR: file open\n");  // \n ì¶”ê°€
                 }
                 else {
                     char line[256], fid[32], fmac[64], fname[64];
@@ -117,7 +117,7 @@ int main() {
                         }
                     }
                     fclose(fp);
-                    strcpy(buffer, found ? "OK\n" : "NOT FOUND\n"); // ¡Ú Å¬¶ó°¡ '\n' ±â´Ù¸®¹Ç·Î °³Çà Æ÷ÇÔ
+                    strcpy(buffer, found ? "OK\n" : "NOT FOUND\n"); // â˜… í´ë¼ê°€ '\n' ê¸°ë‹¤ë¦¬ë¯€ë¡œ ê°œí–‰ í¬í•¨
                 }
             }
             else {
@@ -131,11 +131,11 @@ int main() {
             }
         }
         else {
-            printf("¹®ÀÚ¿­ ¼ö½Å ½ÇÆĞ ¶Ç´Â ¿¬°á Á¾·á\n");
+            printf("ë¬¸ìì—´ ìˆ˜ì‹  ì‹¤íŒ¨ ë˜ëŠ” ì—°ê²° ì¢…ë£Œ\n");
             CLOSE_SOCKET(client_fd); CLOSE_SOCKET(server_fd); WSACleanup(); return 1;
         }
 
-        // 2) 3È¸ °ÔÀÓ ¹İº¹ Ã³¸® (°¢ È¸Â÷: START 1ÇÁ·¹ÀÓ + FINAL 1ÇÁ·¹ÀÓ)
+        // 2) 3íšŒ ê²Œì„ ë°˜ë³µ ì²˜ë¦¬ (ê° íšŒì°¨: START 1í”„ë ˆì„ + FINAL 1í”„ë ˆì„)
         FILE* score_fp = fopen("studentscore.dat", "a");
         if (!score_fp) {
             fprintf(stderr, "studentscore.dat open error: %d\n", errno);
@@ -144,34 +144,34 @@ int main() {
 
         char game_result[MAX_GAMES][128];
         for (int game_round = 1; game_round <= MAX_GAMES; game_round++) {
-            unsigned int ttime = 0;   // START: ½ÃÀÛ½Ã°¢(ms) / FINAL: °æ°ú½Ã°£(ms)
-            unsigned int dtime = 0;   // Ç¥ÁØÆíÂ÷ µî(Áö±İÀº 0)
-            int jegiCount = 0;        // ¶ó¿îµå ÁõºĞ Ä«¿îÆ®
+            unsigned int ttime = 0;   // START: ì‹œì‘ì‹œê°(ms) / FINAL: ê²½ê³¼ì‹œê°„(ms)
+            unsigned int dtime = 0;   // í‘œì¤€í¸ì°¨ ë“±(ì§€ê¸ˆì€ 0)
+            int jegiCount = 0;        // ë¼ìš´ë“œ ì¦ë¶„ ì¹´ìš´íŠ¸
             int timestamp_count = 0;
             char status[16] = "";
 
-            printf("\n=== °ÔÀÓ %dÈ¸Â÷ ½ÃÀÛ ===\n", game_round);
+            printf("\n=== ê²Œì„ %díšŒì°¨ ì‹œì‘ ===\n", game_round);
 
             while (timestamp_count < 2) {
-                read_len = recv_frame(client_fd, buffer, BUF_SIZE); // ¡Ú '\n' ¶Ç´Â '\0' ÇÁ·¹ÀÓ ´ÜÀ§ ¼ö½Å
+                read_len = recv_frame(client_fd, buffer, BUF_SIZE); // â˜… '\n' ë˜ëŠ” '\0' í”„ë ˆì„ ë‹¨ìœ„ ìˆ˜ì‹ 
                 if (read_len > 0) {
                     // START <ttime> <dtime> <value>
                     // FINAL <ttime> <dtime> <value>
                     int n = sscanf(buffer, "%15s %u %u %d", status, &ttime, &dtime, &jegiCount);
                     if (n >= 1 && strcmp(status, "START") == 0) {
                         timestamp_count++;
-                        printf("START ¼ö½Å: %s %u %u %d\n", status, ttime, dtime, jegiCount);
+                        printf("START ìˆ˜ì‹ : %s %u %u %d\n", status, ttime, dtime, jegiCount);
                     }
                     else if (n >= 1 && strcmp(status, "FINAL") == 0) {
                         timestamp_count++;
-                        printf("FINAL ¼ö½Å: %s %u %u %d\n", status, ttime, dtime, jegiCount);
+                        printf("FINAL ìˆ˜ì‹ : %s %u %u %d\n", status, ttime, dtime, jegiCount);
                     }
                     else {
-                        printf("Çü½Ä ¿À·ù: [%s] (len=%d)\n", buffer, read_len);
+                        printf("í˜•ì‹ ì˜¤ë¥˜: [%s] (len=%d)\n", buffer, read_len);
                     }
                 }
                 else if (read_len == 0) {
-                    printf("Å¬¶óÀÌ¾ğÆ® ¿¬°á Á¾·á\n");
+                    printf("í´ë¼ì´ì–¸íŠ¸ ì—°ê²° ì¢…ë£Œ\n");
                     break;
                 }
                 else {
@@ -180,29 +180,29 @@ int main() {
                 }
             }
 
-            printf("°ÔÀÓ %dÈ¸Â÷ °á°ú ¡æ ÃÑÃ¼·ù½Ã°£: %u ms, È¸´ç Ã¼·ù½Ã°£ Æò±Õ %u, Á¦±âÈ½¼ö: %d\n",
+            printf("ê²Œì„ %díšŒì°¨ ê²°ê³¼ â†’ ì´ì²´ë¥˜ì‹œê°„: %u ms, íšŒë‹¹ ì²´ë¥˜ì‹œê°„ í‰ê·  %u, ì œê¸°íšŸìˆ˜: %d\n",
                 game_round, ttime, dtime, jegiCount);
 
             sprintf(game_result[game_round - 1], " %d %d %u %u ", game_round, jegiCount, ttime, dtime);
 
-            snprintf(buffer, sizeof(buffer), "%d ROUND DONE \n", game_round); // ÀÀ´äÀº °³Çà Æ÷ÇÔ
+            snprintf(buffer, sizeof(buffer), "%d ROUND DONE \n", game_round); // ì‘ë‹µì€ ê°œí–‰ í¬í•¨
             WRITE_DATA(client_fd, buffer, (int)strlen(buffer));
         }
 
-        printf("\n=== 3È¸ °ÔÀÓ Á¾·á ===\n");
+        printf("\n=== 3íšŒ ê²Œì„ ì¢…ë£Œ ===\n");
         fprintf(score_fp, "%s %s %s %s %s %s\n", id, mac, name, game_result[0], game_result[1], game_result[2]);
         fflush(score_fp);
         fclose(score_fp);
 
         CLOSE_SOCKET(client_fd);
-        printf("Å¬¶óÀÌ¾ğÆ® Á¾·á. ´ÙÀ½ Å¬¶óÀÌ¾ğÆ® ´ë±â...\n");
+        printf("í´ë¼ì´ì–¸íŠ¸ ì¢…ë£Œ. ë‹¤ìŒ í´ë¼ì´ì–¸íŠ¸ ëŒ€ê¸°...\n");
 
-        // ¿î¿µÀÚ ÀÔ·Â
-        printf("¼­¹ö¸¦ °è¼Ó ¿î¿µÇÏ·Á¸é Enter, Á¾·áÇÏ·Á¸é q ÀÔ·Â ÈÄ Enter: ");
+        // ìš´ì˜ì ì…ë ¥
+        printf("ì„œë²„ë¥¼ ê³„ì† ìš´ì˜í•˜ë ¤ë©´ Enter, ì¢…ë£Œí•˜ë ¤ë©´ q ì…ë ¥ í›„ Enter: ");
         char cmd[8];
         fgets(cmd, sizeof(cmd), stdin);
         if (cmd[0] == 'q' || cmd[0] == 'Q') {
-            printf("¼­¹ö Á¾·áÇÕ´Ï´Ù.\n");
+            printf("ì„œë²„ ì¢…ë£Œí•©ë‹ˆë‹¤.\n");
             break;
         }
     }

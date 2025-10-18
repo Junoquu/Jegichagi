@@ -1,2 +1,13 @@
 #secret
 secrets.h
+
+studentlist.dat
+studentscore.dat
+
+.vs
+
+CppProperties.json
+
+main.zip
+
+main/

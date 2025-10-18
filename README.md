@@ -50,10 +50,10 @@ Jegichagi/
 ```cpp
 // secrets.h
 #pragma once
-static constexpr char WIFI_SSID[]     = "ssid_name";
-static constexpr char WIFI_PASSWORD[] = "wifi_password";
-static constexpr char SERVER_HOST[]   = "my-pc.local";
-static constexpr uint16_t SERVER_PORT = 5000;
+#define WIFI_SSID_STR      "your_ssid_name"
+#define WIFI_PASSWORD_STR  "your_wifi_password"
+#define SERVER_HOST_STR    "your_pc.local"
+#define SERVER_PORT_NUM    your_port_num
 ```
 
 3) 스케치 설정 포인트

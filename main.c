@@ -143,20 +143,19 @@ int main() {
         }
 
         char game_result[MAX_GAMES][128];
+        int disconnected = 0;
+
         for (int game_round = 1; game_round <= MAX_GAMES; game_round++) {
-            unsigned int ttime = 0;   // START: 시작시각(ms) / FINAL: 경과시간(ms)
-            unsigned int dtime = 0;   // 표준편차 등(지금은 0)
-            int jegiCount = 0;        // 라운드 증분 카운트
+            unsigned int ttime = 0, dtime = 0;
+            int jegiCount = 0;
             int timestamp_count = 0;
             char status[16] = "";
 
             printf("\n=== 게임 %d회차 시작 ===\n", game_round);
 
             while (timestamp_count < 2) {
-                read_len = recv_frame(client_fd, buffer, BUF_SIZE); // ★ '\n' 또는 '\0' 프레임 단위 수신
+                read_len = recv_frame(client_fd, buffer, BUF_SIZE);
                 if (read_len > 0) {
-                    // START <ttime> <dtime> <value>
-                    // FINAL <ttime> <dtime> <value>
                     int n = sscanf(buffer, "%15s %u %u %d", status, &ttime, &dtime, &jegiCount);
                     if (n >= 1 && strcmp(status, "START") == 0) {
                         timestamp_count++;
@@ -172,12 +171,20 @@ int main() {
                 }
                 else if (read_len == 0) {
                     printf("클라이언트 연결 종료\n");
-                    break;
+                    disconnected = 1;
+                    break; // while 탈출
                 }
                 else {
                     fprintf(stderr, "recv error: %d\n", WSAGetLastError());
-                    break;
+                    disconnected = 1;
+                    break; // while 탈출
                 }
+            }
+
+            if (disconnected) {
+                // 세션 중단: 남은 회차 처리하지 않음
+                printf("세션 중단: 남은 회차를 취소하고 클라이언트를 닫습니다.\n");
+                break; // for(game_round) 탈출
             }
 
             printf("게임 %d회차 결과 → 총체류시간: %u ms, 회당 체류시간 평균 %u, 제기횟수: %d\n",
@@ -185,9 +192,59 @@ int main() {
 
             sprintf(game_result[game_round - 1], " %d %d %u %u ", game_round, jegiCount, ttime, dtime);
 
-            snprintf(buffer, sizeof(buffer), "%d ROUND DONE \n", game_round); // 응답은 개행 포함
-            WRITE_DATA(client_fd, buffer, (int)strlen(buffer));
+            snprintf(buffer, sizeof(buffer), "%d ROUND DONE \n", game_round);
+            if (WRITE_DATA(client_fd, buffer, (int)strlen(buffer)) <= 0) {
+                printf("클라이언트 응답 송신 실패 → 세션 종료\n");
+                disconnected = 1;
+                break;
+            }
         }
+
+        //for (int game_round = 1; game_round <= MAX_GAMES; game_round++) {
+        //    unsigned int ttime = 0;   // START: 시작시각(ms) / FINAL: 경과시간(ms)
+        //    unsigned int dtime = 0;   // 표준편차 등(지금은 0)
+        //    int jegiCount = 0;        // 라운드 증분 카운트
+        //    int timestamp_count = 0;
+        //    char status[16] = "";
+
+        //    printf("\n=== 게임 %d회차 시작 ===\n", game_round);
+
+        //    while (timestamp_count < 2) {
+        //        read_len = recv_frame(client_fd, buffer, BUF_SIZE); // ★ '\n' 또는 '\0' 프레임 단위 수신
+        //        if (read_len > 0) {
+        //            // START <ttime> <dtime> <value>
+        //            // FINAL <ttime> <dtime> <value>
+        //            int n = sscanf(buffer, "%15s %u %u %d", status, &ttime, &dtime, &jegiCount);
+        //            if (n >= 1 && strcmp(status, "START") == 0) {
+        //                timestamp_count++;
+        //                printf("START 수신: %s %u %u %d\n", status, ttime, dtime, jegiCount);
+        //            }
+        //            else if (n >= 1 && strcmp(status, "FINAL") == 0) {
+        //                timestamp_count++;
+        //                printf("FINAL 수신: %s %u %u %d\n", status, ttime, dtime, jegiCount);
+        //            }
+        //            else {
+        //                printf("형식 오류: [%s] (len=%d)\n", buffer, read_len);
+        //            }
+        //        }
+        //        else if (read_len == 0) {
+        //            printf("클라이언트 연결 종료\n");
+        //            break;
+        //        }
+        //        else {
+        //            fprintf(stderr, "recv error: %d\n", WSAGetLastError());
+        //            break;
+        //        }
+        //    }
+
+        //    printf("게임 %d회차 결과 → 총체류시간: %u ms, 회당 체류시간 평균 %u, 제기횟수: %d\n",
+        //        game_round, ttime, dtime, jegiCount);
+
+        //    sprintf(game_result[game_round - 1], " %d %d %u %u ", game_round, jegiCount, ttime, dtime);
+
+        //    snprintf(buffer, sizeof(buffer), "%d ROUND DONE \n", game_round); // 응답은 개행 포함
+        //    WRITE_DATA(client_fd, buffer, (int)strlen(buffer));
+        //}
 
         printf("\n=== 3회 게임 종료 ===\n");
         fprintf(score_fp, "%s %s %s %s %s %s\n", id, mac, name, game_result[0], game_result[1], game_result[2]);
@@ -195,7 +252,15 @@ int main() {
         fclose(score_fp);
 
         CLOSE_SOCKET(client_fd);
-        printf("클라이언트 종료. 다음 클라이언트 대기...\n");
+        //printf("클라이언트 종료. 다음 클라이언트 대기...\n");
+        if (disconnected) {
+            // 불완전 세션이면 점수파일 기록을 생략하거나, 유효 회차만 기록
+            // 여기서는 생략 예시:
+            fclose(score_fp);
+            CLOSE_SOCKET(client_fd);
+            printf("클라이언트 종료. 다음 클라이언트 대기...\n");
+            continue; // 다음 accept로
+        }
 
         // 운영자 입력
         printf("서버를 계속 운영하려면 Enter, 종료하려면 q 입력 후 Enter: ");

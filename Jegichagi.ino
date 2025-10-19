@@ -43,6 +43,8 @@ static bool inGame        = false;    // 라운드 진행 중
 static int  gameRound     = 0;        // 0..(MAX_GAMES)
 static unsigned long ttime = 0;   // START 시각(ms)
 
+static volatile bool isHandshaking = false;
+
 // ---------------------------- 유틸/표시 ----------------------------
 void drawCount(uint32_t cnt, const char* sub=nullptr) {
   M5.Display.fillScreen(TFT_BLACK);
@@ -95,71 +97,95 @@ void queue_final_packet() {
 
 // ---------------------------- 핸드셰이크 ----------------------------
 bool connectAndHandshake() {
-  if (!ensureWifi()) return false;
-  if (!g_client.connect(SERVER_IP, SERVER_PORT)) return false;
+  isHandshaking = true;                 // ★ 시작 플래그
+
+  if (!ensureWifi()) { 
+    Serial.println("[NET] Wi-Fi not connected");
+    isHandshaking = false;
+    return false;
+  }
+
+  if (g_client.connected()) g_client.stop();         // 이전 소켓 깨끗이
+  Serial.printf("[TCP] CONNECT to %s:%u ...\n", SERVER_IP, (unsigned)SERVER_PORT);
+  if (!g_client.connect(SERVER_IP, SERVER_PORT)) {
+    Serial.println("[TCP] CONNECT FAIL");
+    g_client.stop();
+    isHandshaking = false;
+    return false;
+  }
+  Serial.println("[TCP] CONNECT OK");
 
   g_client.setNoDelay(true);
   g_client.setTimeout(1000);
 
   String id  = STUDENT_ID_STR;
-  String mac = WiFi.macAddress();          // "AA:BB:CC:DD:EE:FF"
-  String name = STUDENT_NAME_STR;          // If name has spaces, server parsing fails → use name.replace(" ","_") if needed.
+  String mac = WiFi.macAddress();
+  String name = STUDENT_NAME_STR;
 
   char hello[160];
-  // End with CRLF (server reads by '\n')
   snprintf(hello, sizeof(hello), "%s %s %s\r\n",
-           id.c_str(),
-           mac.c_str(),
-           name.c_str());
+           id.c_str(), mac.c_str(), name.c_str());
   g_client.write((const uint8_t*)hello, strlen(hello));
-  Serial.printf("TX HELLO: %s", hello);
+  Serial.printf("[HELLO] TX HELLO: %s", hello);
 
-  // Wait for response (allow OK, OK READY, etc.)
   uint32_t t0 = millis();
   while (millis() - t0 < 3000) {
     if (g_client.available()) {
       String line = g_client.readStringUntil('\n');
-      line.trim(); // remove \r
-      Serial.printf("RX HELLO: [%s]\n", line.c_str());
+      line.trim();
+      Serial.printf("[HELLO ]RX HELLO: [%s]\n", line.c_str());
       if (line.startsWith("OK")) {
         serverReady   = true;
         sessionActive = true;
-        drawCount(g_kickCount, "OK received > A=START");
+        inGame        = false;
+        gameRound     = 0;
+        g_baseCount   = g_kickCount;
+
+        while (g_client.available()) g_client.read(); // 잔여 바이트 비움
+        drawCount(g_kickCount, "OK > A=START");
+        isHandshaking = false;                        // ★ 정상 종료
         return true;
       } else {
-        return false; // NOT FOUND/ERROR
+        Serial.println("[HELLO] not OK → stop");
+        g_client.stop();
+        isHandshaking = false;       // ★ 실패 종료
+        return false;
       }
     }
-    delay(10);
+    vTaskDelay(pdMS_TO_TICKS(10));
   }
-  return false; // timeout
+  Serial.println("[HELLO] timeout → stop");
+  g_client.stop();
+  isHandshaking = false;             // ★ 타임아웃 종료
+  return false;
 }
 
 // ---------------------------- 소켓 송신 태스크 ----------------------------
 void SocketTask(void* parameter) {
+  uint32_t dc_since = 0;
   for (;;) {
     if (!g_client.connected()) {
-      serverReady = sessionActive = inGame = false;
-      vTaskDelay(pdMS_TO_TICKS(200));
+      if (dc_since == 0) dc_since = millis();
+      if (millis() - dc_since > 400) {      // 0.4s 이상 지속 시만 세션 리셋
+        serverReady = sessionActive = inGame = false;
+      }
+      vTaskDelay(pdMS_TO_TICKS(100));
       continue;
+    } else {
+      dc_since = 0;
     }
-    if (!serverReady || !sessionActive) {
-      vTaskDelay(pdMS_TO_TICKS(50));
-      continue;
-    }
+
+    if (!serverReady || !sessionActive) { vTaskDelay(pdMS_TO_TICKS(50)); continue; }
 
     Msg msg;
     if (xQueueReceive(g_msgq, &msg, pdMS_TO_TICKS(50)) == pdTRUE) {
-      // \n terminated (server accepts both \n/\0)
       size_t len = strnlen(msg.buf, sizeof(msg.buf));
       g_client.write((const uint8_t*)msg.buf, len);
       g_client.write((const uint8_t*)"\n", 1);
       Serial.printf("TX: %s\\n\n", msg.buf);
 
-      // After FINAL, read server response → No auto START (manual)
       if (strncmp(msg.buf, "FINAL", 5) == 0) {
-        String resp;
-        uint32_t t0 = millis();
+        String resp; uint32_t t0 = millis();
         while (millis() - t0 < 1200) {
           if (g_client.available()) { resp = g_client.readStringUntil('\n'); break; }
           vTaskDelay(pdMS_TO_TICKS(10));
@@ -167,12 +193,8 @@ void SocketTask(void* parameter) {
         resp.trim();
         if (resp.length()) Serial.printf("RX: [%s]\n", resp.c_str());
         if (resp.length() && (resp[0]=='1' || resp[0]=='2' || resp[0]=='3')) {
-          if (gameRound < MAX_GAMES) {
-            drawCount(g_kickCount, "Next round ready > A=START");
-          } else {
-            drawCount(g_kickCount, "3 rounds finished > A=Reconnect");
-            sessionActive = false;
-          }
+          if (gameRound < MAX_GAMES) drawCount(g_kickCount, "Next round ready > A=START");
+          else { drawCount(g_kickCount, "3 rounds finished > A=Reconnect"); sessionActive = false; }
         }
       }
     }
@@ -335,13 +357,19 @@ void loop() {
   static unsigned long lastA=0, lastB=0;
   unsigned long now = millis();
 
-  // A 버튼: 접속/OK → START/FINAL 토글
+  if (!isHandshaking && g_client.connected() && !serverReady) {
+    g_client.stop();
+    vTaskDelay(pdMS_TO_TICKS(50));
+  }
+
+  // A 버튼: 접속/OK → START/FINAL 토글 (이하는 기존 그대로)
   if (M5.BtnA.wasPressed() && now - lastA > BTN_DEBOUNCE_MS) {
+    Serial.println("[BTN] A pressed");
     lastA = now;
     if (!g_client.connected() || !serverReady) {
       drawCount(g_kickCount, "Waiting for server connection/OK...");
-      if (connectAndHandshake()) drawCount(g_kickCount, "OK → A=START");
-      else drawCount(g_kickCount, "NOT FOUND");
+      if (connectAndHandshake()) drawCount(g_kickCount, "OK > A=START");
+      else                      drawCount(g_kickCount, "NOT FOUND");
     } else {
       if (!inGame && gameRound < MAX_GAMES) {
         queue_start_packet();
@@ -350,8 +378,7 @@ void loop() {
         if (millis() - ttime < MIN_ROUND_MS) {
           drawCount(g_kickCount - g_baseCount, "Keep going a bit more > A=FINAL");
         } else {
-          queue_final_packet();
-          // 응답은 SocketTask에서 처리
+          queue_final_packet();  // 응답은 SocketTask
         }
       } else {
         drawCount(g_kickCount, "3 rounds finished > A=Reconnect");
@@ -361,6 +388,7 @@ void loop() {
 
   // B 버튼: 수동 카운트(라운드 중일 때만)
   if (M5.BtnB.wasPressed() && now - lastB > BTN_DEBOUNCE_MS) {
+    Serial.println("[BTN] B pressed");
     lastB = now;
 #if COUNT_MODE_MANUAL
     if (inGame) {
